@@ -2,7 +2,7 @@ const http = require("http");
 const path = require("path");
 const fs = require("fs").promises;
 
-const port = 3000;
+const port = process.env.PORT || 3000;
 
 const server = http.createServer(async (req, res) => {
   console.log(`${req.method} ${req.url}`);
