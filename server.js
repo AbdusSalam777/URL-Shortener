@@ -1,11 +1,27 @@
+require("dotenv").config();
 const http = require("http");
 const path = require("path");
 const fs = require("fs").promises;
+const { MongoClient } = require("mongodb");
 
 const port = process.env.PORT || 3000;
+const mongoURI = process.env.MONGO_URI;
+const client = new MongoClient(mongoURI);
+
+async function connectDB() {
+  try {
+    await client.connect();
+    console.log("Connected to MongoDB Atlas");
+    return client.db("urlShortener").collection("urls");
+  } catch (err) {
+    console.error("MongoDB connection failed:", err);
+    process.exit(1);
+  }
+}
 
 const server = http.createServer(async (req, res) => {
   console.log(`${req.method} ${req.url}`);
+  const urlCollection = await connectDB();
 
   // Serve index.html
   if (req.method === "GET" && req.url === "/") {
@@ -60,14 +76,15 @@ const server = http.createServer(async (req, res) => {
 
       try {
         const { url, short } = JSON.parse(body);
-        const jsonPath = path.join(__dirname, "public", "data.json");
+        const existing = await urlCollection.findOne({ short });
 
-        const fileData = await fs.readFile(jsonPath, "utf-8").catch(() => "{}");
-        const jsondata = JSON.parse(fileData);
+        if (existing) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Shortcode already exists" }));
+          return;
+        }
 
-        jsondata[short] = url;
-
-        await fs.writeFile(jsonPath, JSON.stringify(jsondata, null, 2), "utf-8");
+        await urlCollection.insertOne({ short, url });
 
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ message: "Short URL saved!" }));
@@ -81,14 +98,12 @@ const server = http.createServer(async (req, res) => {
   // Redirect short URL
   else if (req.method === "GET") {
     const shortcode = req.url.slice(1);
-    const jsonPath = path.join(__dirname, "public", "data.json");
 
     try {
-      const data = await fs.readFile(jsonPath, "utf-8");
-      const parsed = JSON.parse(data);
+      const result = await urlCollection.findOne({ short: shortcode });
 
-      if (parsed[shortcode]) {
-        res.writeHead(302, { Location: parsed[shortcode] });
+      if (result) {
+        res.writeHead(302, { Location: result.url });
         res.end();
       } else {
         res.writeHead(404, { "Content-Type": "text/plain" });
