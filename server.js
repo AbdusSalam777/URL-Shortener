@@ -1,121 +1,68 @@
-require("dotenv").config();
-const http = require("http");
+const express = require("express");
 const path = require("path");
 const fs = require("fs").promises;
-const { MongoClient } = require("mongodb");
+const cors = require("cors");
 
-const port = process.env.PORT || 3000;
-const mongoURI = process.env.MONGO_URI;
-const client = new MongoClient(mongoURI);
+const app = express();
+const PORT = process.env.PORT || 3002;
 
-async function connectDB() {
+// ===== MIDDLEWARE =====
+app.use(cors());
+app.use(express.json()); // for JSON body parsing
+app.use(express.static(path.join(__dirname, "public"))); // serve static files
+
+// ===== ROUTES =====
+
+// Serve index.html
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
+
+// Handle POST request to shorten URL
+app.post("/shorten", async (req, res) => {
   try {
-    await client.connect();
-    console.log("Connected to MongoDB Atlas");
-    return client.db("urlShortener").collection("urls");
-  } catch (err) {
-    console.error("MongoDB connection failed:", err);
-    process.exit(1);
-  }
-}
-
-const server = http.createServer(async (req, res) => {
-  console.log(`${req.method} ${req.url}`);
-  const urlCollection = await connectDB();
-
-  // Serve index.html
-  if (req.method === "GET" && req.url === "/") {
-    try {
-      const data = await fs.readFile(path.join(__dirname, "public", "index.html"), "utf-8");
-      res.writeHead(200, { "Content-Type": "text/html" });
-      res.end(data);
-    } catch {
-      res.writeHead(404);
-      res.end("404 page not found");
+    const { url, short } = req.body;
+    if (!url || !short) {
+      return res.status(400).json({ message: "URL and short code are required" });
     }
-  }
 
-  // Serve CSS
-  else if (req.method === "GET" && req.url === "/style.css") {
-    try {
-      const data = await fs.readFile(path.join(__dirname, "public", "style.css"), "utf-8");
-      res.writeHead(200, { "Content-Type": "text/css" });
-      res.end(data);
-    } catch {
-      res.writeHead(404);
-      res.end("404 page not found");
-    }
-  }
+    const path_ = path.join(__dirname, "public", "data.json");
+    const fileData = await fs.readFile(path_, "utf-8").catch(() => "{}");
+    const jsondata = JSON.parse(fileData);
 
-  // Serve JS
-  else if (req.method === "GET" && req.url === "/script.js") {
-    try {
-      const data = await fs.readFile(path.join(__dirname, "public", "script.js"), "utf-8");
-      res.writeHead(200, { "Content-Type": "text/javascript" });
-      res.end(data);
-    } catch {
-      res.writeHead(404);
-      res.end("404 page not found");
-    }
-  }
+    jsondata[short] = url;
 
-  // Handle shorten POST
-  else if (req.method === "POST" && req.url === "/shorten") {
-    let body = "";
+    await fs.writeFile(path_, JSON.stringify(jsondata, null, 2), "utf-8");
 
-    req.on("data", (chunk) => {
-      body += chunk;
-    });
+    console.log("✅ Data saved successfully to data.json 👍");
+    res.json({ shortUrl: `${req.headers.host}/${short}` });
 
-    req.on("end", async () => {
-      if (!body) {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Empty request body" }));
-        return;
-      }
-
-      try {
-        const { url, short } = JSON.parse(body);
-        const existing = await urlCollection.findOne({ short });
-
-        if (existing) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Shortcode already exists" }));
-          return;
-        }
-
-        await urlCollection.insertOne({ short, url });
-
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ message: "Short URL saved!" }));
-      } catch (error) {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Invalid JSON" }));
-      }
-    });
-  }
-
-  // Redirect short URL
-  else if (req.method === "GET") {
-    const shortcode = req.url.slice(1);
-
-    try {
-      const result = await urlCollection.findOne({ short: shortcode });
-
-      if (result) {
-        res.writeHead(302, { Location: result.url });
-        res.end();
-      } else {
-        res.writeHead(404, { "Content-Type": "text/plain" });
-        res.end("Short URL not found");
-      }
-    } catch (error) {
-      res.writeHead(500, { "Content-Type": "text/plain" });
-      res.end("Server Error");
-    }
+  } catch (error) {
+    console.error("Error saving short URL:", error);
+    res.status(500).json({ message: "Server error" });
   }
 });
 
-server.listen(port, () => {
-  console.log(`Server listening on http://localhost:${port}`);
+// Redirect short code to original URL
+app.get("/:shortcode", async (req, res) => {
+  try {
+    const shortcode = req.params.shortcode;
+    const path_json = path.join(__dirname, "public", "data.json");
+    const json_data = await fs.readFile(path_json, "utf-8").catch(() => "{}");
+    const parsed_data = JSON.parse(json_data);
+
+    if (parsed_data[shortcode]) {
+      res.redirect(parsed_data[shortcode]);
+    } else {
+      res.status(404).send("Short URL not found");
+    }
+  } catch (error) {
+    console.error("Error reading data.json:", error);
+    res.status(500).send("Server error");
+  }
+});
+
+// ===== START SERVER =====
+app.listen(PORT, () => {
+  console.log(`🚀 Server listening on port ${PORT}`);
 });
